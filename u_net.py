@@ -45,6 +45,46 @@ class Block(nn.Module):
         x = self.relu(x)
         return x
 
+class ResBlock(nn.Module): #https://medium.com/codex/architectures-for-medical-image-segmentation-part-3-residual-unet-ac5a4ca4212d
+    """Residual block 
+    Parameters
+    ----------
+    in_ch : int
+        number of input channels to the block
+    out_ch : int
+        number of output channels of the block
+    """
+
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.c1 = nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)
+        self.relu = nn.ReLU()
+        self.c2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
+
+        #Shortcut Connection (Identity Mapping)
+        self.s = nn.Conv2d(in_ch, out_ch, kernel_size=1, padding=0, stride=1)
+
+    def forward(self, inputs):
+        """Performs the forward pass of the block.
+        Parameters
+        ----------
+        inputs : torch.Tensor
+            the input to the block
+        Returns
+        -------
+        skip : torch.Tensor
+            the output of the forward pass
+        """
+        x = self.c1(inputs)
+        x = self.relu(x)
+        x = self.c2(x)
+        s = self.s(inputs)
+        skip = x + s
+        #res = self.relu(skip)
+        
+        return skip
+      
+
 
 class Encoder(nn.Module):
     """A representation for the encoder part of the unet.
@@ -54,7 +94,7 @@ class Encoder(nn.Module):
         holds the number of input channels of each block in the encoder
     """
 
-    def __init__(self, chs=(1, 64, 128, 256, 512, 1024)):
+    def __init__(self, chs=(1, 64, 128, 256, 512)):
         super().__init__()
         # convolutional blocks
         self.enc_blocks = nn.ModuleList([Block(chs[i], chs[i + 1]) for i in range(len(chs) - 1)])
@@ -75,10 +115,10 @@ class Encoder(nn.Module):
         ftrs = []  # a list to store features
         for block in self.enc_blocks:
             x = block(x)
-            # # save features to concatenate to decoder blocks
+            # save features to concatenate to decoder blocks
             ftrs.append(x)
             x = self.pool(x)
-        ftrs.append(x)  # save features
+        ftrs.append(x)
         return ftrs
 
 
@@ -91,11 +131,11 @@ class Decoder(nn.Module):
         holds the number of input channels of each block in the decoder
     """
 
-    def __init__(self, chs=(1024, 512, 256, 128, 64)):
+    def __init__(self, chs= (512, 256, 128, 64)):
         super().__init__()
         self.chs = chs
         self.upconvs = nn.ModuleList([nn.ConvTranspose2d(chs[i], chs[i], 2, 2) for i in range(len(chs) - 1)])
-        self.dec_blocks = nn.ModuleList([Block(2 * chs[i], chs[i + 1]) for i in range(len(chs) - 1)])  # the first argument of the Block is multipled by 2 since you concatenate the features (which creates twice as many).
+        self.dec_blocks = nn.ModuleList([ResBlock(2 * chs[i], chs[i + 1]) for i in range(len(chs) - 1)])  # the first argument of the Block is multipled by 2 since you concatenate the features (which creates twice as many).
 
     def forward(self, x, encoder_features):
         """Performs the forward pass for all blocks in the decoder.
@@ -135,11 +175,11 @@ class UNet(nn.Module):
         number of output classes of the segmentation
     """
 
-    def __init__(self,enc_chs=(1, 64, 128, 256),dec_chs=(256, 128, 64, 32),num_classes=1,):
+    def __init__(self,enc_chs=(1, 64, 128, 256, 512),dec_chs=(512, 256, 128, 64, 32),num_classes=1,):
         super().__init__()
         self.encoder = Encoder(enc_chs)
         self.decoder = Decoder(dec_chs)
-        self.head = nn.Sequential(nn.Conv2d(dec_chs[-1], num_classes, 1),)  # output layer
+        self.head = nn.Sequential(nn.Conv2d(dec_chs[-1], num_classes, 1))  # output layer
 
     def forward(self, x):
         """Performs the forward pass of the unet.
@@ -162,4 +202,5 @@ class UNet(nn.Module):
         out = self.decoder(reverse_enc_ftrs[0], reverse_enc_ftrs[1:])
         # last layer ensure output has appropriate number of channels (1)
         out = self.head(out)
+        #out = x + out
         return out
