@@ -9,178 +9,348 @@ import torch
 import torch.nn as nn
 
 
-class Block(nn.Module):
-    """Convolutional building block of the unet
-    Parameters
-    ----------
-    in_ch : int
-        number of input channels to the block
-    out_ch : int
-        number of output channels of the block
-    """
+# class Block(nn.Module):
+#     """Convolutional building block of the unet. A block consists of
+#     two convolutional layers with ReLU activations
+#     Parameters
+#     ----------
+#     in_ch : int
+#         number of input channels to the block
+#     out_ch : int
+#         number of output channels of the block
+#     """
 
-    def __init__(self, in_ch, out_ch):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)
-        self.relu = nn.ReLU()
-        self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
+#     def __init__(self, in_ch, out_ch):
+#         super().__init__()
+#         self.conv = nn.Sequential(nn.Conv2d(in_ch, out_ch, kernel_size=3, padding='same', bias='True'),
+#                                   nn.ReLU(),
+#                                   nn.Conv2d(out_ch, out_ch, 3, padding='same', bias='True'),
+#                                   nn.ReLU())
 
-    def forward(self, x):
-        """Performs the forward pass of the block.
-        Parameters
-        ----------
-        x : torch.Tensor
-            the input to the block
-        Returns
-        -------
-        x : torch.Tensor
-            the output of the forward pass
-        """
-        # a block consists of two convolutional layers
-        # with ReLU activations
+#     def forward(self, x):
+#         """Performs the forward pass of the block.
+#         Parameters
+#         ----------
+#         x : torch.Tensor
+#             the input to the block
+#         Returns
+#         -------
+#         x : torch.Tensor
+#             the output of the forward pass
+#         """
+#         return self.conv(x)
 
-        x = self.conv1(x)
-        x = self.relu(x)
-        x = self.conv2(x)
-        x = self.relu(x)
-        return x
 
-class ResBlock(nn.Module): #https://medium.com/codex/architectures-for-medical-image-segmentation-part-3-residual-unet-ac5a4ca4212d
-    """Residual block 
-    Parameters
-    ----------
-    in_ch : int
-        number of input channels to the block
-    out_ch : int
-        number of output channels of the block
-    """
+# class AttentionBlock(nn.Module):
+#     """The attention gate of the unet.
+#     Parameters
+#     ----------
+#     in_c : tuple
+#         holds the number of input channels of each block in the decoder
+#     out_c : tuple
+#         holds the number of output channels of each block in the decoder
+#     """
+#     def __init__(self, in_c, out_c):
+#         super().__init__()
+ 
+#         self.Wg = nn.Conv2d(in_c, out_c, kernel_size=1, padding=0)
+#         self.Ws = nn.Conv2d(out_c, out_c, kernel_size=1, padding=0)
+#         self.relu = nn.ReLU(inplace=True)
+#         self.output = nn.Sequential(nn.Conv2d(out_c, out_c, kernel_size=1, padding=0),nn.Sigmoid())
+ 
+#     def forward(self, gate, skip):
+#         """Performs the forward pass in the attention gate.
+#           Parameters
+#           ----------
+#           gate : torch.Tensor
+#               gating signal from previous layer
+#           gate : torch.Tensor
+#               activation from corresponding encoder layer
+#           Returns
+#           -------
+#           out: torch.Tensor
+#               output activations
+#           """
+#         Wg = self.Wg(gate)
+#         Ws = self.Ws(skip)
+#         out = self.relu(Wg + Ws)
+#         out = self.output(out)
+#         return out 
+    
+    
+# class Encoder(nn.Module):
+#     """A representation for the encoder part of the unet.
+#     Parameters
+#     ----------
+#     chs : tuple
+#         holds the number of input channels of each block in the encoder
+#     """
 
-    def __init__(self, in_ch, out_ch):
-        super().__init__()
-        self.c1 = nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)
-        self.relu = nn.ReLU()
-        self.c2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
+#     def __init__(self, chs):
+#         super().__init__()
+#         self.enc_blocks = nn.ModuleList([Block(chs[i], chs[i + 1]) for i in range(len(chs) - 1)])
+#         self.pool = nn.MaxPool2d((2,2))
 
-        #Shortcut Connection (Identity Mapping)
-        self.s = nn.Conv2d(in_ch, out_ch, kernel_size=1, padding=0, stride=1)
+#     def forward(self, x):
+#         """Performs the forward pass for all blocks in the encoder.
+#         Parameters
+#         ----------
+#         x : torch.Tensor
+#             input
+#         Returns
+#         -------
+#         list[torch.Tensor]
+#             contains the outputs of each block in the encoder
+#         """
+#         ftrs = []  # a list to store features
+#         for block in self.enc_blocks:
+#             x = block(x)
+#             ftrs.append(x) # save features to concatenate to decoder blocks
+#             x = self.pool(x)
+#         ftrs.append(x)
+#         return ftrs
 
-    def forward(self, inputs):
-        """Performs the forward pass of the block.
-        Parameters
-        ----------
-        inputs : torch.Tensor
-            the input to the block
-        Returns
-        -------
-        skip : torch.Tensor
-            the output of the forward pass
-        """
-        x = self.c1(inputs)
-        x = self.relu(x)
-        x = self.c2(x)
-        s = self.s(inputs)
-        skip = x + s
-        #res = self.relu(skip)
+
+# class Decoder(nn.Module):
+#     """A representation for the decoder part of the unet.
+#     Layers consist of transposed convolutions followed by convolutional blocks.
+#     Parameters
+#     ----------
+#     enc_chs : tuple
+#         holds the number of input channels of each block in the encoder
+#     dec_chs : tuple
+#         holds the number of input channels of each block in the decoder
+#     """
+
+#     def __init__(self, enc_chs, dec_chs):
+#         super().__init__()
+#         self.chs = dec_chs
+#         self.upconvs = nn.ModuleList([nn.ConvTranspose2d(dec_chs[i], dec_chs[i], 2, 2) for i in range(len(dec_chs) - 1)])
+#        # self.attention = nn.ModuleList([AttentionBlock(dec_chs[i], dec_chs[i+1]) for i in range(len(dec_chs) - 1)])
+#         self.dec_blocks = nn.ModuleList([Block(2*dec_chs[i], dec_chs[i + 1]) for i in range(len(dec_chs) - 1)])  # the first argument of the Block is multipled by 2 since you concatenate the features (which creates twice as many).
+
+#     def forward(self, x, encoder_features):
+#         """Performs the forward pass for all blocks in the decoder.
+#         Parameters
+#         ----------
+#         x : torch.Tensor
+#             input to the decoder
+#         encoder_features: list
+#             contains the encoder features to be concatenated to the corresponding level of the decoder
+#         Returns
+#         -------
+#         x : torch.Tensor
+#             output of the decoder
+#         """
+#         for i in range(len(self.chs) - 1):
+#             x = self.upconvs[i](x) # transposed convolution
+#             enc_ftrs = encoder_features[i] # get the features from the corresponding level of the encoder
+#            # s = self.attention[i](x, enc_ftrs)
+#             x = torch.cat([x, enc_ftrs], dim=1) # concatenate these features to x
+#             x = self.dec_blocks[i](x) # convolutional block
+
+#         return x
+
+
+# class UNet(nn.Module):
+#     """A representation for a unet
+#     Parameters
+#     ----------
+#     enc_chs : tuple
+#         holds the number of input channels of each block in the encoder
+#     dec_chs : tuple
+#         holds the number of input channels of each block in the decoder
+#     num_classes : int
+#         number of output classes of the segmentation
+#     """
+
+#     def __init__(self,enc_chs=(1, 64, 128, 256, 512),dec_chs=(512, 256, 128, 64, 32),num_classes=1,):
+#         super().__init__()
+#         self.encoder = Encoder(enc_chs)
+#         self.decoder = Decoder(enc_chs,dec_chs)
+#         self.head = nn.Sequential(nn.Conv2d(dec_chs[-1], num_classes, 1))
+
+#     def forward(self, x):
+#         """Performs the forward pass of the unet.
+#         Parameters
+#         ----------
+#         x : torch.Tensor
+#             the input to the unet (image)
+#         Returns
+#         -------
+#         out : torch.Tensor
+#             unet output
+#         """
+
+#         enc_ftrs = self.encoder(x) # the encoder features are the input to the decoder
+#         reverse_enc_ftrs = enc_ftrs[::-1] #Reverse the features,because the last output of the encoder (0 index after reverse) is the input to the decoder
+#         out = self.decoder(reverse_enc_ftrs[0], reverse_enc_ftrs[1:])
+#         out = self.head(out) # last layer ensures output has appropriate number of channels (1)
+#         out = x + out
         
-        return skip
-      
+#         return out
 
-
-class Encoder(nn.Module):
-    """A representation for the encoder part of the unet.
+class Block(nn.Module):
+    """Convolutional building block of the unet. A block consists of
+    two convolutional layers with ReLU activations
     Parameters
     ----------
-    chs : tuple
-        holds the number of input channels of each block in the encoder
+    in_ch : int
+        number of input channels to the block
+    out_ch : int
+        number of output channels of the block
     """
 
-    def __init__(self, chs=(1, 64, 128, 256, 512)):
+    def __init__(self, in_ch, out_ch):
         super().__init__()
-        # convolutional blocks
-        self.enc_blocks = nn.ModuleList([Block(chs[i], chs[i + 1]) for i in range(len(chs) - 1)])
-        # max pooling
-        self.pool = nn.MaxPool2d(2)
+        self.conv = nn.Sequential(nn.Conv2d(in_ch, out_ch, kernel_size=3, padding='same', bias='True'),
+                                  nn.ReLU(),
+                                  nn.Conv2d(out_ch, out_ch, 3, padding='same', bias='True'),
+                                  nn.ReLU())
 
     def forward(self, x):
-        """Performs the forward pass for all blocks in the encoder.
+        """Performs the forward pass of the block.
         Parameters
         ----------
         x : torch.Tensor
-            input
+            the input to the block
         Returns
         -------
-        list[torch.Tensor]
-            contains the outputs of each block in the encoder
+        x : torch.Tensor
+            the output of the forward pass
         """
-        ftrs = []  # a list to store features
-        for block in self.enc_blocks:
-            x = block(x)
-            # save features to concatenate to decoder blocks
-            ftrs.append(x)
-            x = self.pool(x)
-        ftrs.append(x)
-        return ftrs
-
-
-class Decoder(nn.Module):
-    """A representation for the decoder part of the unet.
-    Layers consist of transposed convolutions followed by convolutional blocks.
+        return self.conv(x)
+    
+class Encoder_block(nn.Module):
+    """The encoder part of the unet.
     Parameters
     ----------
-    chs : tuple
-        holds the number of input channels of each block in the decoder
+    in_c : tuple
+        holds the number of input channels of each block in the encoder
+    out_c : tuple
+        holds the number of output channels of each block in the encoder
     """
-
-    def __init__(self, chs= (512, 256, 128, 64)):
+    def __init__(self, in_c, out_c):
         super().__init__()
-        self.chs = chs
-        self.upconvs = nn.ModuleList([nn.ConvTranspose2d(chs[i], chs[i], 2, 2) for i in range(len(chs) - 1)])
-        self.dec_blocks = nn.ModuleList([ResBlock(2 * chs[i], chs[i + 1]) for i in range(len(chs) - 1)])  # the first argument of the Block is multipled by 2 since you concatenate the features (which creates twice as many).
-
-    def forward(self, x, encoder_features):
-        """Performs the forward pass for all blocks in the decoder.
+ 
+        self.conv = Block(in_c, out_c)
+        self.pool = nn.MaxPool2d((2, 2))
+ 
+    def forward(self, x):
+        """Performs the forward pass in the encoder.
+          Parameters
+          ----------
+          x : torch.Tensor
+              input
+          Returns
+          -------
+          p: torch.Tensor
+              contains the output of the encoder block
+          s: torch.Tensor
+              contains the features of the encoder block
+          """
+        s = self.conv(x)
+        p = self.pool(s)
+        return s, p
+    
+class Attention_block(nn.Module):
+    """The attention gate of the unet.
+    Parameters
+    ----------
+    in_c : tuple
+        holds the number of input channels of each block in the encoder
+    out_c : tuple
+        holds the number of output channels of each block in the encoder
+    """
+    def __init__(self, in_c, out_c):
+        super().__init__()
+ 
+        self.Wg = nn.Conv2d(in_c, out_c, kernel_size=1, padding=0)
+        self.Ws = nn.Conv2d(out_c, out_c, kernel_size=1, padding=0)
+        self.relu = nn.ReLU(inplace=True)
+        self.output = nn.Sequential(nn.Conv2d(out_c, out_c, kernel_size=1, padding=0),nn.Sigmoid())
+ 
+    def forward(self, gate, skip):
+        """Performs the forward pass in the attention gate.
+          Parameters
+          ----------
+          gate : torch.Tensor
+              gating signal from previous layer
+          gate : torch.Tensor
+              activation from corresponding encoder layer
+          Returns
+          -------
+          out: torch.Tensor
+              output activations
+          """
+        Wg = self.Wg(gate)
+        Ws = self.Ws(skip)
+        out = self.relu(Wg + Ws)
+        out = self.output(out)
+        return out 
+    
+    
+class Decoder_block(nn.Module):
+    """The decoder part of the unet.
+    Parameters
+    ----------
+    in_c : tuple
+        holds the number of input channels of each block in the decoder
+    out_c : tuple
+        holds the number of output channels of each block in the decoder
+    """
+    def __init__(self, in_c, out_c):
+        super().__init__()
+ 
+        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+        self.ag = Attention_block(in_c, out_c)
+        self.c1 = Block(in_c+out_c, out_c)
+ 
+    def forward(self, x, s):
+        """Performs the forward pass in the decoder
         Parameters
         ----------
         x : torch.Tensor
             input to the decoder
-        encoder_features: list
+        s: torch.Tensor
             contains the encoder features to be concatenated to the corresponding level of the decoder
         Returns
         -------
         x : torch.Tensor
             output of the decoder
         """
-        for i in range(len(self.chs) - 1):
-            # transposed convolution
-            x = self.upconvs[i](x)
-            # get the features from the corresponding level of the encoder
-            enc_ftrs = encoder_features[i]
-            # concatenate these features to x
-            x = torch.cat([x, enc_ftrs], dim=1)
-            # convolutional block
-            x = self.dec_blocks[i](x)
-
+        x = self.up(x)
+        s = self.ag(x, s)
+        x = torch.cat([x, s], axis=1)
+        x = self.c1(x)
         return x
-
-
-class UNet(nn.Module):
-    """A representation for a unet
+    
+class AttentionNet(nn.Module):
+    """A UNet with an attention gate
     Parameters
     ----------
-    enc_chs : tuple
-        holds the number of input channels of each block in the encoder
-    dec_chs : tuple
-        holds the number of input channels of each block in the decoder
     num_classes : int
         number of output classes of the segmentation
+    nr_filters : int
+        number of filters in the first layer
     """
-
-    def __init__(self,enc_chs=(1, 64, 128, 256, 512),dec_chs=(512, 256, 128, 64, 32),num_classes=1,):
+    def __init__(self, num_classes=1, nr_filters=32):
         super().__init__()
-        self.encoder = Encoder(enc_chs)
-        self.decoder = Decoder(dec_chs)
-        self.head = nn.Sequential(nn.Conv2d(dec_chs[-1], num_classes, 1))  # output layer
-
+ 
+        self.e1 = Encoder_block(1, nr_filters)
+        self.e2 = Encoder_block(nr_filters, 2*nr_filters)
+        self.e3 = Encoder_block(2*nr_filters, 4*nr_filters)
+        self.e4 = Encoder_block(4*nr_filters, 8*nr_filters)
+    
+        self.b1 = Block(8*nr_filters, 16*nr_filters)
+ 
+        self.d1 = Decoder_block(16*nr_filters, 8*nr_filters)
+        self.d2 = Decoder_block(8*nr_filters, 4*nr_filters)
+        self.d3 = Decoder_block(4*nr_filters, 2*nr_filters)
+        self.d4 = Decoder_block(2*nr_filters, nr_filters)
+ 
+        self.output = nn.Conv2d(nr_filters, num_classes, kernel_size=1, padding=0)
+ 
     def forward(self, x):
         """Performs the forward pass of the unet.
         Parameters
@@ -190,17 +360,22 @@ class UNet(nn.Module):
         Returns
         -------
         out : torch.Tensor
-            unet output, the logits of the predicted segmentation mask
+            unet output
         """
 
-        enc_ftrs = self.encoder(x)
-        # the encoder features are the input to the decoder
-        # we reverse the features first
-        reverse_enc_ftrs = enc_ftrs[::-1]
-        # this is because the lower level encoder features are concatenated first
-        # the last output of the encoder (0 index after reverse) is the input to the decoder
-        out = self.decoder(reverse_enc_ftrs[0], reverse_enc_ftrs[1:])
-        # last layer ensure output has appropriate number of channels (1)
-        out = self.head(out)
-        #out = x + out
-        return out
+        s1, p1 = self.e1(x)
+        s2, p2 = self.e2(p1)
+        s3, p3 = self.e3(p2)
+        s4, p4 = self.e4(p3)
+ 
+        b1 = self.b1(p4)
+ 
+        d1 = self.d1(b1, s4)
+        d2 = self.d2(d1, s3)
+        d3 = self.d3(d2, s2)
+        d4 = self.d4(d3, s1)
+ 
+        output = self.output(d4)+x
+        
+        return output
+    
