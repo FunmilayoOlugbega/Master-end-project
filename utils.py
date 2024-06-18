@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
 from pydicom.pixel_data_handlers import apply_modality_lut
+from skimage.metrics import structural_similarity as ssim
 from pathlib import Path
 from scipy import signal
 from torchvision.models import vgg19
@@ -41,8 +42,6 @@ class ProstateDataset(torch.utils.data.Dataset):
         
         self.high_res_list = self.normalize(self.load_images(paths))[0]
         self.low_res_list = self.downsampling(self.high_res_list, 2)
-        self.high_res_list = self.downsampling(self.high_res_list, 1)
-        #self.low_res_list =  [self.low_res_list[i]/self.normalize(self.high_res_list)[1][i] for i in range(len(self.low_res_list))]#self.normalize(self.low_res_list)[0]#[self.low_res_list[i]/self.normalize(self.high_res_list)[1][i] for i in range(len(self.low_res_list))]
         self.high_res_patches = self.create_patches(self.high_res_list)
         self.low_res_patches = self.create_patches(self.low_res_list)
         self.total_patches = self.high_res_patches.shape[1]
@@ -91,7 +90,6 @@ class ProstateDataset(torch.utils.data.Dataset):
         """
         low_res_images = []
         x, y, z = self.img_size
-        img_dim = 128 # make dimensions of the slices 128x128
         center_x, center_y, center_z = x // 2, y // 2, z // 2
         kx_crop, ky_crop, kz_crop = round(x / sampling_factor / 2), round(y / sampling_factor / 2), round(z / sampling_factor / 2)
         for img in image_list:
@@ -99,20 +97,17 @@ class ProstateDataset(torch.utils.data.Dataset):
             dft_shift = np.fft.fftshift(np.fft.fftn(img))
             fft_shift = dft_shift[center_x - kx_crop:center_x + kx_crop, center_y - ky_crop:center_y + ky_crop, center_z - kz_crop:center_z + kz_crop]
             # Hanning filter
-            if  sampling_factor!=1:   
-                A, B, C = np.ix_(signal.windows.tukey(kx_crop * 2, alpha=0.3), signal.windows.tukey(ky_crop * 2, alpha=0.3), signal.windows.tukey(kz_crop * 2, alpha=0.3))
-                window = A * B * C
-                fft_crop = fft_shift * window
-            else:
-                fft_crop = fft_shift
+            A, B, C = np.ix_(signal.windows.tukey(kx_crop * 2, alpha=0.3), signal.windows.tukey(ky_crop * 2, alpha=0.3), signal.windows.tukey(kz_crop * 2, alpha=0.3))
+            window = A * B * C
+            fft_crop = fft_shift * window
             # Zero padding
-            pad_width = ((center_x - kx_crop, center_x - kx_crop), (img_dim//2 - ky_crop, img_dim//2 - ky_crop), (img_dim//2  - kz_crop, img_dim//2 - kz_crop))
-            result = np.pad(fft_crop, pad_width, mode='constant')
+            pad_width = ((center_x - kx_crop, center_x - kx_crop),(center_y - ky_crop, center_y - ky_crop),(center_z - kz_crop, center_z - kz_crop))
+            result = np.pad(fft_crop , pad_width, mode='constant')
             # Inverse Fourier
             fft_ifft_shift = np.fft.ifftshift(result)
             image_then = np.fft.ifftn(fft_ifft_shift)
             image_then = np.abs(image_then)
-            low_res_images.append(image_then)
+            low_res_images.append(image_then[1:-1,:,:])
             
         return low_res_images
 
@@ -196,10 +191,9 @@ class ValidDataset(torch.utils.data.Dataset):
         self.slice_nr = int(slice_nr)
         self.img_transform = transforms.Compose([transforms.ToTensor()])
         self.high_res_list = self.normalize(self.load_images(paths))[0]
-        self.low_res_list = self.downsampling(self.high_res_list, 2)
-        self.high_res_list = self.downsampling(self.high_res_list, 1)
-        self.percentile = self.normalize(self.high_res_list)[1]
-        #self.low_res_list = self.low_res_list/self.percentile 
+        self.percentile = self.normalize(self.load_images(paths))[1]
+        self.low_res_list = self.downsampling(self.high_res_list, 2)[1:-1,:,:]
+        self.high_res_list = self.high_res_list[1:-1,:,:]
         self.high_res_patches = self.create_patches(self.high_res_list[self.slice_nr,:,:])
         self.low_res_patches = self.create_patches(self.low_res_list[self.slice_nr,:,:])
         self.total_patches = self.high_res_patches.shape[1]
@@ -244,22 +238,17 @@ class ValidDataset(torch.utils.data.Dataset):
         """
 
         x, y, z = self.img_size
-        img_dim = 128
         center_x, center_y, center_z = x // 2, y // 2, z // 2
         kx_crop, ky_crop, kz_crop = round(x / sampling_factor / 2), round(y / sampling_factor / 2), round(z / sampling_factor / 2)
-
         # Fourier transform
         dft_shift = np.fft.fftshift(np.fft.fftn(img))
         fft_shift = dft_shift[center_x - kx_crop:center_x + kx_crop, center_y - ky_crop:center_y + ky_crop, center_z - kz_crop:center_z + kz_crop]
         # Hanning filter
-        if  sampling_factor!=1:   
-            A, B, C = np.ix_(signal.windows.tukey(kx_crop * 2, alpha=0.3), signal.windows.tukey(ky_crop * 2, alpha=0.3), signal.windows.tukey(kz_crop * 2, alpha=0.3))
-            window = A * B * C
-            fft_crop = fft_shift * window
-        else:
-            fft_crop = fft_shift
+        A, B, C = np.ix_(signal.windows.tukey(kx_crop * 2, alpha=0.3), signal.windows.tukey(ky_crop * 2, alpha=0.3), signal.windows.tukey(kz_crop * 2, alpha=0.3))
+        window = A * B * C
+        fft_crop = fft_shift * window
         # Zero padding
-        pad_width = ((center_x - kx_crop, center_x - kx_crop), (img_dim//2 - ky_crop, img_dim//2 - ky_crop), (img_dim//2  - kz_crop, img_dim//2 - kz_crop))
+        pad_width = ((center_x - kx_crop, center_x - kx_crop),(center_y - ky_crop, center_y - ky_crop),(center_z - kz_crop, center_z - kz_crop))
         result = np.pad(fft_crop, pad_width, mode='constant')
         # Inverse Fourier
         fft_ifft_shift = np.fft.ifftshift(result)
@@ -369,3 +358,49 @@ class VGGLoss(nn.Module):
         vgg_second = self.vgg(self.trans(targets).to(device))
         perceptual_loss = self.loss(vgg_second, vgg_first)
         return perceptual_loss
+
+
+def FoldPatches(patches_list, KERNEL_SIZE, STRIDE):
+    """Fold the patches in the list back to the original image
+    by averaging the overlapping voxel values
+    ----------
+    patches_list: list
+        list of image patches
+    """
+    B, C, W, H = 1, 1, 128, 128
+    kernel_size = KERNEL_SIZE
+    stride = STRIDE
+
+    # Create a tensor to store the reconstructed image and a weight tensor
+    reconstructed_image = torch.zeros((B, C, W, H))
+    weight_tensor = torch.zeros((B, C, W, H))
+
+    # Calculate the number of patches in each dimension
+    num_patches_x = (W - kernel_size) // stride + 1
+    num_patches_y = (H - kernel_size) // stride + 1
+
+    patch_idx = 0
+    for i in range(0, num_patches_y * stride, stride):
+        for j in range(0, num_patches_x * stride, stride):
+            reconstructed_image[:, :, i:i + kernel_size, j:j + kernel_size] += patches_list[patch_idx]
+            weight_tensor[:, :, i:i + kernel_size, j:j + kernel_size] += 1
+            patch_idx += 1
+    # Normalize the reconstructed image by the weight tensor
+    reconstructed_image /= weight_tensor
+
+    return reconstructed_image
+
+def MSE(original, compressed): 
+    mse = np.mean((original - compressed) ** 2) 
+    return mse
+
+
+def PSNR(original, compressed, norms): 
+    mse = np.mean((original - compressed) ** 2)
+    max_pixel = 1#norms*(1/0.95)
+    psnr = 20 * np.log10(max_pixel) - 10 * np.log10(mse)
+    return psnr
+    
+def SSIM(original, compressed): 
+    ssim_index = ssim(original, compressed, data_range=1)
+    return ssim_index
