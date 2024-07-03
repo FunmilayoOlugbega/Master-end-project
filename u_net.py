@@ -7,188 +7,8 @@ Created on Mon May  6 13:48:41 2024
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-
-# class Block(nn.Module):
-#     """Convolutional building block of the unet. A block consists of
-#     two convolutional layers with ReLU activations
-#     Parameters
-#     ----------
-#     in_ch : int
-#         number of input channels to the block
-#     out_ch : int
-#         number of output channels of the block
-#     """
-
-#     def __init__(self, in_ch, out_ch):
-#         super().__init__()
-#         self.conv = nn.Sequential(nn.Conv2d(in_ch, out_ch, kernel_size=3, padding='same', bias='True'),
-#                                   nn.ReLU(),
-#                                   nn.Conv2d(out_ch, out_ch, 3, padding='same', bias='True'),
-#                                   nn.ReLU())
-
-#     def forward(self, x):
-#         """Performs the forward pass of the block.
-#         Parameters
-#         ----------
-#         x : torch.Tensor
-#             the input to the block
-#         Returns
-#         -------
-#         x : torch.Tensor
-#             the output of the forward pass
-#         """
-#         return self.conv(x)
-
-
-# class AttentionBlock(nn.Module):
-#     """The attention gate of the unet.
-#     Parameters
-#     ----------
-#     in_c : tuple
-#         holds the number of input channels of each block in the decoder
-#     out_c : tuple
-#         holds the number of output channels of each block in the decoder
-#     """
-#     def __init__(self, in_c, out_c):
-#         super().__init__()
- 
-#         self.Wg = nn.Conv2d(in_c, out_c, kernel_size=1, padding=0)
-#         self.Ws = nn.Conv2d(out_c, out_c, kernel_size=1, padding=0)
-#         self.relu = nn.ReLU(inplace=True)
-#         self.output = nn.Sequential(nn.Conv2d(out_c, out_c, kernel_size=1, padding=0),nn.Sigmoid())
- 
-#     def forward(self, gate, skip):
-#         """Performs the forward pass in the attention gate.
-#           Parameters
-#           ----------
-#           gate : torch.Tensor
-#               gating signal from previous layer
-#           gate : torch.Tensor
-#               activation from corresponding encoder layer
-#           Returns
-#           -------
-#           out: torch.Tensor
-#               output activations
-#           """
-#         Wg = self.Wg(gate)
-#         Ws = self.Ws(skip)
-#         out = self.relu(Wg + Ws)
-#         out = self.output(out)
-#         return out 
-    
-    
-# class Encoder(nn.Module):
-#     """A representation for the encoder part of the unet.
-#     Parameters
-#     ----------
-#     chs : tuple
-#         holds the number of input channels of each block in the encoder
-#     """
-
-#     def __init__(self, chs):
-#         super().__init__()
-#         self.enc_blocks = nn.ModuleList([Block(chs[i], chs[i + 1]) for i in range(len(chs) - 1)])
-#         self.pool = nn.MaxPool2d((2,2))
-
-#     def forward(self, x):
-#         """Performs the forward pass for all blocks in the encoder.
-#         Parameters
-#         ----------
-#         x : torch.Tensor
-#             input
-#         Returns
-#         -------
-#         list[torch.Tensor]
-#             contains the outputs of each block in the encoder
-#         """
-#         ftrs = []  # a list to store features
-#         for block in self.enc_blocks:
-#             x = block(x)
-#             ftrs.append(x) # save features to concatenate to decoder blocks
-#             x = self.pool(x)
-#         ftrs.append(x)
-#         return ftrs
-
-
-# class Decoder(nn.Module):
-#     """A representation for the decoder part of the unet.
-#     Layers consist of transposed convolutions followed by convolutional blocks.
-#     Parameters
-#     ----------
-#     enc_chs : tuple
-#         holds the number of input channels of each block in the encoder
-#     dec_chs : tuple
-#         holds the number of input channels of each block in the decoder
-#     """
-
-#     def __init__(self, enc_chs, dec_chs):
-#         super().__init__()
-#         self.chs = dec_chs
-#         self.upconvs = nn.ModuleList([nn.ConvTranspose2d(dec_chs[i], dec_chs[i], 2, 2) for i in range(len(dec_chs) - 1)])
-#        # self.attention = nn.ModuleList([AttentionBlock(dec_chs[i], dec_chs[i+1]) for i in range(len(dec_chs) - 1)])
-#         self.dec_blocks = nn.ModuleList([Block(2*dec_chs[i], dec_chs[i + 1]) for i in range(len(dec_chs) - 1)])  # the first argument of the Block is multipled by 2 since you concatenate the features (which creates twice as many).
-
-#     def forward(self, x, encoder_features):
-#         """Performs the forward pass for all blocks in the decoder.
-#         Parameters
-#         ----------
-#         x : torch.Tensor
-#             input to the decoder
-#         encoder_features: list
-#             contains the encoder features to be concatenated to the corresponding level of the decoder
-#         Returns
-#         -------
-#         x : torch.Tensor
-#             output of the decoder
-#         """
-#         for i in range(len(self.chs) - 1):
-#             x = self.upconvs[i](x) # transposed convolution
-#             enc_ftrs = encoder_features[i] # get the features from the corresponding level of the encoder
-#            # s = self.attention[i](x, enc_ftrs)
-#             x = torch.cat([x, enc_ftrs], dim=1) # concatenate these features to x
-#             x = self.dec_blocks[i](x) # convolutional block
-
-#         return x
-
-
-# class UNet(nn.Module):
-#     """A representation for a unet
-#     Parameters
-#     ----------
-#     enc_chs : tuple
-#         holds the number of input channels of each block in the encoder
-#     dec_chs : tuple
-#         holds the number of input channels of each block in the decoder
-#     num_classes : int
-#         number of output classes of the segmentation
-#     """
-
-#     def __init__(self,enc_chs=(1, 64, 128, 256, 512),dec_chs=(512, 256, 128, 64, 32),num_classes=1,):
-#         super().__init__()
-#         self.encoder = Encoder(enc_chs)
-#         self.decoder = Decoder(enc_chs,dec_chs)
-#         self.head = nn.Sequential(nn.Conv2d(dec_chs[-1], num_classes, 1))
-
-#     def forward(self, x):
-#         """Performs the forward pass of the unet.
-#         Parameters
-#         ----------
-#         x : torch.Tensor
-#             the input to the unet (image)
-#         Returns
-#         -------
-#         out : torch.Tensor
-#             unet output
-#         """
-
-#         enc_ftrs = self.encoder(x) # the encoder features are the input to the decoder
-#         reverse_enc_ftrs = enc_ftrs[::-1] #Reverse the features,because the last output of the encoder (0 index after reverse) is the input to the decoder
-#         out = self.decoder(reverse_enc_ftrs[0], reverse_enc_ftrs[1:])
-#         out = self.head(out) # last layer ensures output has appropriate number of channels (1)
-#         out = x + out
-        
-#         return out
 
 class Block(nn.Module):
     """Convolutional building block of the unet. A block consists of
@@ -221,52 +41,21 @@ class Block(nn.Module):
         """
         return self.conv(x)
     
-class Encoder_block(nn.Module):
-    """The encoder part of the unet.
-    Parameters
-    ----------
-    in_c : tuple
-        holds the number of input channels of each block in the encoder
-    out_c : tuple
-        holds the number of output channels of each block in the encoder
-    """
-    def __init__(self, in_c, out_c):
-        super().__init__()
- 
-        self.conv = Block(in_c, out_c)
-        self.pool = nn.MaxPool2d((2, 2))
- 
-    def forward(self, x):
-        """Performs the forward pass in the encoder.
-          Parameters
-          ----------
-          x : torch.Tensor
-              input
-          Returns
-          -------
-          p: torch.Tensor
-              contains the output of the encoder block
-          s: torch.Tensor
-              contains the features of the encoder block
-          """
-        s = self.conv(x)
-        p = self.pool(s)
-        return s, p
     
-class Attention_block(nn.Module):
-    """The attention gate of the unet.
+class Attention_gate(nn.Module):
+    """The attention gate uses additive attention and can be deployed in the decoder of the U-net.
     Parameters
     ----------
-    in_c : tuple
+    in_c : int
         holds the number of input channels of each block in the encoder
-    out_c : tuple
+    out_c : int
         holds the number of output channels of each block in the encoder
     """
     def __init__(self, in_c, out_c):
         super().__init__()
  
         self.Wg = nn.Conv2d(in_c, out_c, kernel_size=1, padding=0)
-        self.Ws = nn.Conv2d(out_c, out_c, kernel_size=1, padding=0)
+        self.Ws = nn.Conv2d(out_c, out_c, kernel_size=1, padding=0) 
         self.relu = nn.ReLU(inplace=True)
         self.output = nn.Sequential(nn.Conv2d(out_c, out_c, kernel_size=1, padding=0),nn.Sigmoid())
  
@@ -284,11 +73,257 @@ class Attention_block(nn.Module):
               output activations
           """
         Wg = self.Wg(gate)
-        Ws = self.Ws(skip)
-        out = self.relu(Wg + Ws)
+        Ws = self.Ws(skip) 
+        out = self.relu(Wg + Ws) 
         out = self.output(out)
         return out 
+
+
+class ChannelAttention(nn.Module):
+    """The channel attention of CBAM
+    Parameters
+    ----------
+    channel : int
+        holds the number of output channels of the block in the encoder or decoder
+    reduction: int
+        the reduction ratio of the attention module
+    """       
+    def __init__(self, channel, reduction=8):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        self.fc = nn.Sequential(nn.Conv2d(channel, channel // reduction, 1, bias=False),nn.ReLU(inplace=True),nn.Conv2d(channel // reduction, channel, 1, bias=False))
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        """Performs the forward pass in channel attention
+          Parameters
+          ----------
+          x : torch.Tensor
+              the input to the block
+          Returns
+          -------
+          torch.Tensor
+              output activations
+          """
+        avg_out = self.fc(self.avg_pool(x))
+        max_out = self.fc(self.max_pool(x))
+        out = avg_out + max_out
+        return x * self.sigmoid(out)
+
+
+class SpatialAttention(nn.Module):
+    """The spatial attention of CBAM
+    Parameters
+    ----------
+    kernel_size : int
+        kernel size of the spatial module
+    """
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=kernel_size//2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        """Performs the forward pass in spatial attention
+          Parameters
+          ----------
+          x : torch.Tensor
+              the input to the block
+          Returns
+          -------
+          torch.Tensor
+              output activations
+          """
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        out = torch.concat([avg_out, max_out], dim=1)
+        out = self.conv(out)
+        return x * self.sigmoid(out) 
     
+    
+class CBAM(nn.Module):
+    """Convolution Block Attention Module
+    Parameters
+    ----------
+    channel : int
+        holds the number of output channels of the block in the encoder or decoder
+    reduction: int
+        the reduction ratio of the attention module
+    kernel_size : int
+        kernel size of the spatial module
+    """      
+    def __init__(self, channel, reduction=8, kernel_size=7):
+        super().__init__()
+        self.ca = ChannelAttention(channel, reduction)
+        self.sa = SpatialAttention(kernel_size)
+    
+    def forward(self, x):
+        """Performs the forward pass in CBAM by applying channel and spatial attention
+          Parameters
+          ----------
+          x : torch.Tensor
+              the input to the block
+          Returns
+          -------
+          x : torch.Tensor
+              output activations
+          """
+        x = self.ca(x)
+        x = self.sa(x)
+        return x
+
+
+class Flatten(nn.Module):
+    """Flatten tensor
+      Parameters
+      ----------
+      x : torch.Tensor
+          input tensor
+      Returns
+      -------
+      torch.Tensor
+          tensor with flattened shape
+      """
+    def forward(self, x):
+        return x.view(x.size(0), -1)
+    
+    
+class ChannelGate(nn.Module):
+    """The channel attention of BAM
+    Parameters
+    ----------
+    gate_channel : int
+        holds the number of output channels of the block in the encoder or decoder
+    reduction_ratio: int
+        the reduction ratio of the attention module
+    num_layers : int
+        number of layers
+    """      
+    def __init__(self, gate_channel, reduction_ratio=16, num_layers=1):
+        super(ChannelGate, self).__init__()
+        self.gate_c = nn.Sequential()
+        self.gate_c.add_module( 'flatten', Flatten() )
+        gate_channels = [gate_channel]
+        gate_channels += [gate_channel // reduction_ratio] * num_layers
+        gate_channels += [gate_channel]
+        for i in range( len(gate_channels) - 2 ):
+            self.gate_c.add_module( 'gate_c_fc_%d'%i, nn.Linear(gate_channels[i], gate_channels[i+1]) )
+            self.gate_c.add_module( 'gate_c_bn_%d'%(i+1), nn.BatchNorm1d(gate_channels[i+1]) )
+            self.gate_c.add_module( 'gate_c_relu_%d'%(i+1), nn.ReLU() )
+        self.gate_c.add_module( 'gate_c_fc_final', nn.Linear(gate_channels[-2], gate_channels[-1]) )
+        
+    def forward(self, in_tensor):
+        """Performs the forward pass in channel attention
+          Parameters
+          ----------
+          in_tensor : torch.Tensor
+              the input to the block
+          Returns
+          -------
+          torch.Tensor
+              output activations
+          """
+        avg_pool = F.avg_pool2d( in_tensor, in_tensor.size(2), stride=in_tensor.size(2) )
+        return self.gate_c( avg_pool ).unsqueeze(2).unsqueeze(3).expand_as(in_tensor)
+
+class SpatialGate(nn.Module):
+    """The spatial attention of BAM
+    Parameters
+    ----------
+    gate_channel : int
+        holds the number of output channels of the block in the encoder or decoder
+    reduction_ratio: int
+        the reduction ratio of the attention module
+    dilation_conv_num : int
+        number of convolutions with dilation
+    dilation_val : int
+        value with which padding is done in the convolution
+    """
+    def __init__(self, gate_channel, reduction_ratio=16, dilation_conv_num=2, dilation_val=4):
+        super(SpatialGate, self).__init__()
+        self.gate_s = nn.Sequential()
+        self.gate_s.add_module( 'gate_s_conv_reduce0', nn.Conv2d(gate_channel, gate_channel//reduction_ratio, kernel_size=1))
+        self.gate_s.add_module( 'gate_s_bn_reduce0',	nn.BatchNorm2d(gate_channel//reduction_ratio) )
+        self.gate_s.add_module( 'gate_s_relu_reduce0',nn.ReLU() )
+        for i in range( dilation_conv_num ):
+            self.gate_s.add_module( 'gate_s_conv_di_%d'%i, nn.Conv2d(gate_channel//reduction_ratio, gate_channel//reduction_ratio, kernel_size=3, \
+						padding=dilation_val, padding_mode='replicate', dilation=dilation_val) )
+            self.gate_s.add_module( 'gate_s_bn_di_%d'%i, nn.BatchNorm2d(gate_channel//reduction_ratio) )
+            self.gate_s.add_module( 'gate_s_relu_di_%d'%i, nn.ReLU() )
+        self.gate_s.add_module( 'gate_s_conv_final', nn.Conv2d(gate_channel//reduction_ratio, 1, kernel_size=1) )
+    def forward(self, in_tensor):
+        """Performs the forward pass in spatial attention
+          Parameters
+          ----------
+          in_tensor : torch.Tensor
+              the input to the block
+          Returns
+          -------
+          torch.Tensor
+              output activations
+          """
+        return self.gate_s( in_tensor ).expand_as(in_tensor)
+
+class BAM(nn.Module):
+    """Bottleneck Attention Module
+    Parameters
+    ----------
+    gate_channel : int
+        holds the number of output channels of the block in the encoder or decoder
+    """   
+    def __init__(self, gate_channel):
+        super(BAM, self).__init__()
+        self.channel_att = ChannelGate(gate_channel)
+        self.spatial_att = SpatialGate(gate_channel)
+    def forward(self, in_tensor):
+        """Performs the forward pass in BAM by applying channel and spatial attention
+          Parameters
+          ----------
+          in_tensor : torch.Tensor
+              the input to the block
+          Returns
+          -------
+          x : torch.Tensor
+              output activations after sigmoid is applied
+          """
+        att = 1 + F.sigmoid( self.channel_att(in_tensor) * self.spatial_att(in_tensor) )
+        return att * in_tensor
+
+
+class Encoder_block(nn.Module):
+    """The encoder part of the unet.
+    Parameters
+    ----------
+    in_c : tuple
+        holds the number of input channels of each block in the encoder
+    out_c : tuple
+        holds the number of output channels of each block in the encoder
+    """
+    def __init__(self, in_c, out_c):
+        super().__init__()
+ 
+        self.conv = Block(in_c, out_c)
+        self.pool = nn.MaxPool2d((2, 2))
+        #self.bam = BAM(out_c)
+ 
+    def forward(self, x):
+        """Performs the forward pass in the encoder.
+          Parameters
+          ----------
+          x : torch.Tensor
+              input
+          Returns
+          -------
+          p: torch.Tensor
+              contains the output of the encoder block
+          s: torch.Tensor
+              contains the features of the encoder block
+          """
+        s = self.conv(x)
+        #s = self.bam(s)
+        p = self.pool(s)
+        return s, p
     
 class Decoder_block(nn.Module):
     """The decoder part of the unet.
@@ -303,8 +338,10 @@ class Decoder_block(nn.Module):
         super().__init__()
  
         self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-        self.ag = Attention_block(in_c, out_c)
         self.c1 = Block(in_c+out_c, out_c)
+        #self.ag = Attention_gate(in_c, out_c)
+        #self.cbam = CBAM(out_c)
+        #self.bam = BAM(out_c)
  
     def forward(self, x, s):
         """Performs the forward pass in the decoder
@@ -320,9 +357,10 @@ class Decoder_block(nn.Module):
             output of the decoder
         """
         x = self.up(x)
-        s = self.ag(x, s)
+        #s = self.ag(x, s)
         x = torch.cat([x, s], axis=1)
         x = self.c1(x)
+        #x = self.bam(x)
         return x
     
 class AttentionNet(nn.Module):
