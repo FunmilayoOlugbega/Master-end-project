@@ -7,11 +7,13 @@ Created on Fri May  3 12:43:21 2024
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
+import torch.nn.functional as F
 from pydicom.pixel_data_handlers import apply_modality_lut
-from skimage.metrics import structural_similarity as ssim
 from pathlib import Path
 from scipy import signal
 from torchvision.models import vgg19
+from torch.autograd import Variable
+from math import exp
 import pydicom                       
 import pydicom.data                   
 import numpy as np  
@@ -107,7 +109,7 @@ class ProstateDataset(torch.utils.data.Dataset):
             fft_ifft_shift = np.fft.ifftshift(result)
             image_then = np.fft.ifftn(fft_ifft_shift)
             image_then = np.abs(image_then)
-            low_res_images.append(image_then[1:-1,:,:])
+            low_res_images.append(image_then)
             
         return low_res_images
 
@@ -129,7 +131,28 @@ class ProstateDataset(torch.utils.data.Dataset):
             percentages.append(max_val)
         return norm_images, percentages
  
-    
+    def augment(self, img_list):
+        """Augments the images by flipping and rotation. 
+        The augmented images are added to the list of input images
+        ----------
+        img_list: list
+            list of numpy.ndarrays of 3D images
+        """
+        augmented = []
+        for image in img_list:
+            # flip in x and y diretion
+            x_flip = np.flip(image, 1)
+            y_flip = np.flip(image, 2)
+            
+            # rotate 90, 180 and 270 degrees
+            rotate_90 = np.rot90(image, k=1, axes=(1,2))
+            rotate_180 = np.rot90(image, k=2, axes=(1,2))
+            rotate_270 = np.rot90(image, k=3, axes=(1,2))
+            augmented.extend([x_flip,y_flip,rotate_90,rotate_180,rotate_270])
+        img_list = img_list+augmented
+        
+        return img_list
+        
     def create_patches(self, img_list):
         """Turns images in list into patches with overlap
         ----------
@@ -142,6 +165,7 @@ class ProstateDataset(torch.utils.data.Dataset):
         store = []
         # make patches
         for img in img_list:
+            img = img[1:-1,:,:]
             for slice_ in range(img.shape[0]):
                 image = self.img_transform(img[slice_,:,:].astype(np.float32))
                 patch_img = image.unfold(1, kc, dc).unfold(2, kh, dh)
@@ -227,6 +251,26 @@ class ValidDataset(torch.utils.data.Dataset):
         cropped_img = img[center_x - kx_crop:center_x + kx_crop, center_y - ky_crop:center_y + ky_crop, center_z - kz_crop:center_z + kz_crop]
 
         return cropped_img
+    
+    def augment(self, img_list):
+        """Augments the images by flipping and rotation. 
+        The augmented images are added to the list of input images
+        ----------
+        img_list: list
+            list of numpy.ndarrays of 3D images
+        """
+        augmented = []
+        for image in img_list:
+            # flip in x and y diretion
+            x_flip = np.flip(image, 1)
+            y_flip = np.flip(image, 2)
+            
+            # rotate 90, 180 and 270 degrees
+            rotate_90 = np.rot90(image, k=1, axes=(1,2))
+            rotate_180 = np.rot90(image, k=2, axes=(1,2))
+            rotate_270 = np.rot90(image, k=3, axes=(1,2))
+            augmented.extend([x_flip,y_flip,rotate_90,rotate_180,rotate_270])
+        img_list = img_list+augmented
 
     def downsampling(self, img, sampling_factor):
         """Downsamples the images in a list with the specified sampling factor
@@ -336,7 +380,7 @@ class VGGLoss(nn.Module):
     """ 
     def __init__(self):
         super().__init__()
-        self.vgg = vgg19(pretrained=True).features[:25].eval().to(device)
+        self.vgg = vgg19(pretrained=True).features[:35].eval().to(device)
         self.loss = nn.L1Loss()
         self.trans = transforms.Lambda(lambda x: x.repeat(1, 3, 1, 1) if x.size(1)==1 else x)
 
@@ -360,6 +404,178 @@ class VGGLoss(nn.Module):
         return perceptual_loss
 
 
+
+class SSIMLoss(nn.Module):
+    """
+    Loss function computed as the Structural Similarity Index Measure (SSIM) between images.
+    """
+    def __init__(self):
+        super(SSIMLoss, self).__init__()
+    
+    def gaussian(self, window_size, sigma):
+        """
+        Creates a 1D Gaussian kernel.
+
+        Parameters
+        ----------
+        window_size : int
+            Size of the Gaussian window.
+        sigma : float
+            Standard deviation of the Gaussian distribution.
+        
+        Returns
+        -------
+        torch.Tensor
+            1D Gaussian kernel.
+        """
+        gauss = torch.Tensor([exp(-(x - window_size//2)**2/float(2*sigma**2)) for x in range(window_size)])
+        return gauss/gauss.sum()
+    
+    def create_window(self, window_size):
+        """
+        Creates a 2D Gaussian window.
+     
+        Parameters
+        ----------
+        window_size : int
+            Size of the Gaussian window.
+        
+        Returns
+        -------
+        torch.Tensor
+            2D Gaussian window.
+        """
+        _1D_window = self.gaussian(window_size, 1.5).unsqueeze(1)
+        _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
+        window = Variable(_2D_window.expand(1, 1, window_size, window_size).contiguous())
+        return window
+    
+    def loss(self, img1, img2, window_size=11):
+        """
+        Computes the SSIM loss between two images.
+        
+        Parameters
+        ----------
+        img1 : torch.Tensor
+        Predicted image
+        img2 : torch.Tensor
+        Ground truth image
+        window_size : int, optional
+        Size of the Gaussian window. Default is 11.
+        
+        Returns
+        -------
+        torch.Tensor
+        SSIM loss.
+        """
+        window = self.create_window(window_size).to(device)
+        mu1 = F.conv2d(img1, window, padding = window_size//2, groups = 1)
+        mu2 = F.conv2d(img2, window, padding = window_size//2, groups = 1)
+
+        mu1_sq = mu1.pow(2)
+        mu2_sq = mu2.pow(2)
+        mu1_mu2 = mu1*mu2
+
+        sigma1_sq = F.conv2d(img1*img1, window, padding = window_size//2, groups = 1) - mu1_sq
+        sigma2_sq = F.conv2d(img2*img2, window, padding = window_size//2, groups = 1) - mu2_sq
+        sigma12 = F.conv2d(img1*img2, window, padding = window_size//2, groups = 1) - mu1_mu2
+
+        C1 = 0.01**2
+        C2 = 0.03**2
+
+        ssim_map = 1-((2*mu1_mu2 + C1)*(2*sigma12 + C2))/((mu1_sq + mu2_sq + C1)*(sigma1_sq + sigma2_sq + C2))
+        return ssim_map.mean()
+
+
+    def forward(self, outputs, targets):
+        """Calculates the mean absolute error (MAE) loss between predicted and true values.
+        Parameters
+        ---------
+        outputs : torch.Tensor
+            predictions of super resolution model
+        outputs : torch.Tensor
+            ground truth labels
+            
+        Returns
+         -------
+         float
+             mean absolute error loss
+        """
+        ssim_loss = self.loss(targets, outputs)
+        return ssim_loss    
+
+
+class EdgeLoss(nn.Module):
+    """
+    Class to calculate the edge loss using Sobel edge detection.
+    """
+    def __init__(self):
+        super(EdgeLoss, self).__init__()
+        self.sobel_x, self.sobel_y = self.create_sobel_filters()
+
+    def create_sobel_filters(self):
+        """
+        Create Sobel filters for edge detection in the x and y directions.
+
+        Returns
+        -------
+        torch.Tensor, torch.Tensor
+            Sobel filters for x and y directions.
+        """
+        sobel_x = torch.FloatTensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]).unsqueeze(0).unsqueeze(0).to(device)
+        sobel_y = torch.FloatTensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]]).unsqueeze(0).unsqueeze(0).to(device)
+        sobel_x = nn.Parameter(data=sobel_x, requires_grad=False)
+        sobel_y = nn.Parameter(data=sobel_y, requires_grad=False)
+
+        return sobel_x, sobel_y
+
+    def apply_sobel_filter(self, img, sobel_x, sobel_y):
+        """
+        Apply Sobel filters to an image to get edge maps.
+
+        Parameters
+        ----------
+        img : torch.Tensor
+            Input image tensor.
+        sobel_x : torch.Tensor
+            Sobel filter for the x direction.
+        sobel_y : torch.Tensor
+            Sobel filter for the y direction.
+
+        Returns
+        -------
+        torch.Tensor
+            Edge map of the input image.
+        """
+        edge_x = F.conv2d(img, sobel_x, padding=1)
+        edge_y = F.conv2d(img, sobel_y, padding=1)
+        edge_map = torch.sqrt(edge_x ** 2 + edge_y ** 2)
+        return edge_map
+
+    def forward(self, pred, target):
+        """
+        Calculate the edge loss between predicted and ground truth images.
+
+        Parameters
+        ----------
+        pred : torch.Tensor
+            Predicted image tensor.
+        target : torch.Tensor
+            Ground truth image tensor.
+
+        Returns
+        -------
+        torch.Tensor
+            Edge loss.
+        """
+
+        pred_edges = self.apply_sobel_filter(pred, self.sobel_x, self.sobel_y)
+        target_edges = self.apply_sobel_filter(target, self.sobel_x, self.sobel_y)
+        mae = torch.nn.L1Loss()
+        loss = mae(pred_edges, target_edges)
+        return loss
+    
+    
 def FoldPatches(patches_list, KERNEL_SIZE, STRIDE):
     """Fold the patches in the list back to the original image
     by averaging the overlapping voxel values
@@ -390,17 +606,3 @@ def FoldPatches(patches_list, KERNEL_SIZE, STRIDE):
 
     return reconstructed_image
 
-def MSE(original, compressed): 
-    mse = np.mean((original - compressed) ** 2) 
-    return mse
-
-
-def PSNR(original, compressed, norms): 
-    mse = np.mean((original - compressed) ** 2)
-    max_pixel = 1#norms*(1/0.95)
-    psnr = 20 * np.log10(max_pixel) - 10 * np.log10(mse)
-    return psnr
-    
-def SSIM(original, compressed): 
-    ssim_index = ssim(original, compressed, data_range=1)
-    return ssim_index
