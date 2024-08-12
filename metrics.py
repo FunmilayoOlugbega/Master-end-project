@@ -20,6 +20,12 @@ from matplotlib.pyplot import savefig
 import piq
 from torch.utils.data import DataLoader
 import pandas as pd
+import matplotlib.image as mpimg
+from PIL import Image
+import scipy.signal
+from scipy.stats import linregress
+
+#%% Functions
 
 def normalize(image):
     """Normalize images in list by multiplying with 95th percentile
@@ -64,36 +70,45 @@ def downsampling(img, sampling_factor, a):
     
     return image_then[1:-1,:,:]
 
-        
-# Path to images
-f_name = r"D:\Funmilayo_data\Anonimised data Julian\PAT6\Basisplan\MR"
+#%% Load data      
 
-# Form image
+# Path to images
+f_name = r"D:\Funmilayo_data\Anonimised data Julian\PAT1\Basisplan\MR"
+
+# Load DICOM sequence
 dicom_set = []
 for root, _, filenames in os.walk(f_name):
     for filename in filenames:
         dcm_path = Path(root, filename)
         dicom = pydicom.dcmread(dcm_path, force=True)
         dicom_set.append(dicom)
-                        
+        
+# Sort images on DICOM metadata                        
 dicom_set.sort(key=lambda x: float(x.ImagePositionPatient[2]))
 images = []
 for dicom in dicom_set:
     hu = apply_modality_lut(dicom.pixel_array, dicom)
     images.append(hu)
-img = np.asarray(images)[:,86:214,103:231]
+img = np.asarray(images)[144,86:214,103:231]
+image = Image.fromarray(img)
+if image.mode != 'RGB':
+    img = image.convert('RGB')
+# Save the image
+# image.save(r"D:\Funmilayo_data\runs\img.png")
 
+#%% Calculate metrics for different ways of downsampling
+
+# Normalize the image and downsample in different ways
 img2 = torch.from_numpy(normalize(downsampling(img, 2, 0.3))[0])[140,:,:].unsqueeze(0).unsqueeze(0)
 img3 = torch.from_numpy(normalize(downsampling(img, 2, 0.6))[0])[140,:,:].unsqueeze(0).unsqueeze(0)
 img4 = torch.from_numpy(normalize(downsampling(img, 2, 0.9))[0])[140,:,:].unsqueeze(0).unsqueeze(0)
 img5 = torch.from_numpy(normalize(downsampling(img, 2, 1))[0])[140,:,:].unsqueeze(0).unsqueeze(0)
 img = torch.from_numpy(normalize(img[1:-1,:,:])[0])[140,:,:].unsqueeze(0).unsqueeze(0)
 
-# img2 = torch.from_numpy(normalize(low_img)[0]).unsqueeze(0).unsqueeze(0)
-# img3 =  torch.from_numpy(normalize(pred_img)[0]).unsqueeze(0).unsqueeze(0)
-# img = torch.from_numpy(normalize(high_img)[0]).unsqueeze(0).unsqueeze(0)
 images = [img2, img3, img4, img5]
 df = []
+
+# Calculate metrics for every image
 for i in images:
     psnr = piq.psnr(img, i, data_range=1., reduction='none').item()
     ssim = piq.ssim(img, i, data_range=1.).item()
@@ -103,41 +118,91 @@ for i in images:
     haar = piq.haarpsi(img, i, data_range=1., reduction='none').item()
     df.append({"psnr":psnr, "ssim":ssim,"gmsd":gmsd,
                 "vif":vif,"dists":dists, "haar":haar})
-    
+# Form dataframe    
 df_x = pd.DataFrame(df)
 
-patch = normalize(pred_img)[0][0:30,98:128]
+#%% Calculate average metrics for images in folders
+
+empty = pd.DataFrame(columns=['psnr', 'ssim', 'gmsd', 'vif', 'dists', 'haar'])
+
+psnr = 0
+ssim = 0
+gmsd = 0
+vif = 0
+dists = 0
+haar = 0
+df = []
+
+# Calculate average metrics for 10 saved images
+for i in range(10):
+    img = np.array(Image.open(rf"D:\Funmilayo_data\New folder{i}_b.png").convert('L'))
+    img1 = np.array(Image.open(rf"D:\Funmilayo_data\model_weights_attention\img{i}.png").convert('L'))
+    
+    img1 = torch.from_numpy(normalize(img1)[0]).unsqueeze(0).unsqueeze(0)
+    img = torch.from_numpy(normalize(img)[0]).unsqueeze(0).unsqueeze(0)
+    
+    psnr += piq.psnr(img, img1, data_range=1., reduction='none').item()
+    ssim += piq.ssim(img, img1, data_range=1.).item()
+    gmsd == piq.gmsd(img, img1, data_range=1., reduction='none').item()
+    vif += piq.vif_p(img, img1, data_range=1.).item()
+    dists += piq.DISTS(reduction='none', mean=[0.0, 0.0, 0.0], std=[1.0, 1.0, 1.0])(img, img1).item()
+    haar += piq.haarpsi(img, img1, data_range=1., reduction='none').item()
+
+# Fill in average score in df
+df.append({"psnr":psnr/10, "ssim":ssim/10,"gmsd":gmsd/10,
+            "vif":vif/10,"dists":dists/10, "haar":haar/10})
+empty = pd.concat([empty, pd.DataFrame(df)], ignore_index=True)
+        
+#%% Determine edge sharpness
+
+# Open images (no DICOM)     
+img = np.array(Image.open(r"D:\Funmilayo_data\New folder2_b.png").convert('L'))
+img1 = np.array(Image.open(r"D:\Funmilayo_data\model_weights64\img2.png").convert('L'))
+img2 = np.array(Image.open(r"D:\Funmilayo_data\model_weights_attention\img2.png").convert('L'))
+img3 = np.array(Image.open(r"D:\Funmilayo_data\model_weights2\img2.png").convert('L'))
+
+# Normalize and take a patch of the image with a clear edge    
+img_n = normalize(img)[0]
+patch = img_n[95:130,115:150]#[95:130,115:150]#[0:30,187:216]#[95:130,60:95]
 plt.figure()
 plt.imshow(patch, cmap = 'gray')  
 plt.show() 
 
-y = patch[12,:]
+# Take a line across the edge and plot the intenisty values
+y = patch[15,:]
 x = np.arange(0,len(y))
 plt.title("Line graph") 
 plt.xlabel("X axis") 
 plt.ylabel("Y axis") 
+plt.ylim((0,1))
 plt.plot(x, y, color ="red") 
 plt.show()
 
-def extract_segment(arr):
-    max_index = np.argmax(arr)
+# Find peaks in the intensity 
+#y_smooth = scipy.signal.savgol_filter(y, window_length=5, polyorder=3) # Smooth line plot if needed
+dy = np.gradient(y, x)
+max_slope_idx = np.argmax(dy)
+region_width = 3  # Adjust based on the expected width of the linear region
+start_idx = max(max_slope_idx - region_width, 0)
+end_idx = min(max_slope_idx + region_width, len(x))
 
-    for i in range(max_index+1, len(arr)):
-        if arr[i] > arr[i - 1]:
-            end_index = i
-            break
-    segment = arr[max_index:end_index]
+# Extract the linear region
+x_linear = x[start_idx:end_idx]
+y_linear = y[start_idx:end_idx]
 
-    
-    return segment
+# Fit a line to the linear region
+slope, intercept, r_value, p_value, std_err = linregress(x_linear, y_linear)
 
-def find_percentile(arr, percentile):
-    percentile_value = np.percentile(arr, percentile)
-    print(f"{percentile}th percentile value: {percentile_value}")
-    closest_index = np.argmin(np.abs(arr - percentile_value))
-    return closest_index
-
-small_y = extract_segment(y)
-edge_response = find_percentile(small_y, 10)-find_percentile(small_y, 90)#-find_percentile(small_y, 10)#-np.percentile(y, 10)
-print(edge_response)
-
+# Plotting the results
+plt.figure(figsize=(10, 6))
+plt.plot(x, y, label='Original Data')
+#plt.plot(x, y_smooth, label='Smoothed Data', linewidth=2)
+plt.plot(x_linear, y_linear, label='Linear Region', linewidth=2)
+plt.plot(x_linear, intercept + slope * x_linear, label=f'Fitted Line (Slope = {slope:.2f})', linestyle='--', color='red')
+plt.legend()
+plt.xlabel('Pixel distance')
+plt.ylabel('Intensity')
+plt.ylim((0,1))
+plt.title('Edge response')
+plt.show()
+print(f'Slope of the middle linear region: {slope:.2f}')
