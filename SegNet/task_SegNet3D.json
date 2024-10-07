@@ -1,0 +1,68 @@
+{      
+    "DATA_PARAMETERS": {
+        "DATA_DIR": "D:\\Funmilayo_data\\Anonimised data Julian",
+        "IMAGE_SIZE": {
+            "z": 48, 
+            "y": 176,
+            "x": 272
+        },
+        "STRUCTURES": {
+            "structure_1": "CTV"
+     
+        },
+        "EQUALIZATION_MODE": "None",
+        "BATCH_SIZE": 1,
+        "THREED": true,
+        "load_dose": false
+    },
+    
+    "MODEL_PARAMETERS": {
+        "MODEL": "SegNet3D",
+        "IN_CHS": 1,
+        "OUT_CHS": 1,
+        "AUGMENTATION": {
+            "augmentation_1": "add_shift",
+            "augmentation_2": "add_rotate"
+        }
+    },
+
+    "METRICS": {
+        "metric_1": "DiceScore",
+        "metric_2": "HausdorffDistance",
+        "metric_3": "RelativeVolumeDifference"
+    },
+
+    "LOSS_PARAMETERS":{
+        "LOSS_FUNCTION":[
+            {
+            "name": "DiceFocalLoss",
+            "GAMMA": [1, 2, 3],
+            "ALPHA": [0.25, 0.5, 0.75, 1]
+            },
+            {
+            "name": "DiceLoss"
+            },
+            {
+            "name": "DiceBCELoss"
+            }
+        ],                                
+        "MINIMUM_VALID_LOSS": 1,
+        "EARLY_STOPPING": true
+    },
+
+   "OPTIMIZER_PARAMETERS":{
+        "OPTIMIZER": [
+            {
+            "name": "AdamW",
+            "WEIGHT_DECAY": [1e-2, 1e-3],
+            "BETAS":[
+                {
+                "beta1": 0.95,
+                "beta2": 0.999
+                }]
+            }
+        ],
+        "NUM_EPOCHS": 100,
+        "LEARNING_RATE": 2e-3
+    }
+}
