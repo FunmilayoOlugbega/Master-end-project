@@ -29,7 +29,8 @@
     "METRICS": {
         "metric_1": "DiceScore",
         "metric_2": "HausdorffDistance",
-        "metric_3": "RelativeVolumeDifference"
+        "metric_3": "RelativeVolumeDifference",
+        "metric_4": "SurfaceDice"
     },
 
     "LOSS_PARAMETERS":{
