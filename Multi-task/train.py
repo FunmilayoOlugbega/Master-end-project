@@ -16,7 +16,6 @@ import torchvision
 import seg_net
 import multi_loader
 import metrics
-import plotter
 import matplotlib.pyplot as plt
 import random
 from pathlib import Path
@@ -33,22 +32,22 @@ import cv2 as cv
 
 #%% DATA PREPARATION
 
-# Get cpu or gpu device for training
+# get cpu or gpu device for training
 device =  torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("\nUsing {} device".format(device))
 torch.cuda.empty_cache()
 torch.backends.cudnn.benchmark = True
 
-# to ensure reproducible training/validation split
-random.seed(42)
-
-# directorys with data and to store training checkpoints and logs
-DATA_DIR = Path("D:\Funmilayo_data\Anonimised data Julian")
-
-# SR training settings and hyperparameters
-SR_DIR = Path(r"D:\Funmilayo_data\multi_model_test\SR")  
+# directories
+DATA_DIR = Path("D:\Funmilayo_data\Anonimised data Julian") # data location
+SR_DIR = Path(r"D:\Funmilayo_data\multi_model_test2\SR") # where to save SR results
 SR_DIR.mkdir(parents=True, exist_ok=True)
+SEG_DIR = Path(r"D:\Funmilayo_data\multi_model_test2\SEG") # where to save SegNet results
+SEG_DIR.mkdir(parents=True, exist_ok=True)
+image_path_seg = SEG_DIR / "Images" # path to save output images
+image_path_seg.mkdir(parents=True, exist_ok=True)
 
+# SR hyperparameters
 DATA_SIZE = [50,128,128]
 IMAGE_SIZE = [48, 128, 128]
 PATCH_SIZE = 64
@@ -58,18 +57,13 @@ BATCH_SIZE = 432
 N_EPOCHS = 100
 SR_LEARNING_RATE = 2.5e-4
 
-# SegNet training settings and hyperparameters
-SEG_DIR = Path(r"D:\Funmilayo_data\multi_model_test\SEG")  
-SEG_DIR.mkdir(parents=True, exist_ok=True)
-image_path_seg = SEG_DIR / "Images"
-image_path_seg.mkdir(parents=True, exist_ok=True)
-
+# SegNet  hyperparameters
 STRUCTURES = ['CTV']
 EQUALIZATION_MODE = None
 THREED = True
 LOAD_DOSE = False
-SEG_LEARNING_RATE = 2e-3
-METRICS = [metrics.HausdorffDistance(), metrics.RelativeVolumeDifference(), metrics.SurfaceDice()]
+SEG_LEARNING_RATE = 2.5e-4
+METRICS = [metrics.DiceScore(), metrics.HausdorffDistance(), metrics.RelativeVolumeDifference(), metrics.SurfaceDice()]
 metric_names = []
 for metric in METRICS:
     metric_names.append(metric.__class__.__name__)
@@ -85,7 +79,7 @@ partition = {"train": train_indx, "validation": valid_indx, "test": test_indx}
 dataset = multi_utils.ProstateDataset(partition["train"], DATA_SIZE, PATCH_SIZE , STRIDE)
 dataloader = DataLoader(dataset, shuffle=False, pin_memory=True, batch_size=1)
 
-# load validation data
+# load validation data and create Dataloader
 valid_dataset = multi_utils.ProstateDataset(partition["validation"], DATA_SIZE, PATCH_SIZE , STRIDE)
 valid_dataloader = DataLoader(valid_dataset, shuffle=False, pin_memory=True, batch_size=1)
 
@@ -116,7 +110,7 @@ total_valid_list = []
 scores = {}
 valid_metric_scores ={}
 minimum_valid_loss = 10
-tolerance = 5
+tolerance = 5 
 scaler = GradScaler()
             
 # training loop
@@ -127,6 +121,8 @@ for epoch in range(N_EPOCHS):
     seg_valid_loss = 0.0
     total_train_loss = 0.0
     total_valid_loss = 0.0
+    sr_train_loss = 0.0
+    sr_valid_loss = 0.0
     count = 0
     images = [] 
 
@@ -140,7 +136,7 @@ for epoch in range(N_EPOCHS):
             outputs = sr_model(inputs)  # forward pass
             pixel_loss = 1 * mae(outputs, labels)
             perc_loss = 0.2 * VGG19(outputs, labels)
-            sr_loss = pixel_loss  + perc_loss
+            sr_loss = pixel_loss + perc_loss # calculate loss
         
         # Clean up SR-specific memory
         del inputs, labels, pixel_loss, perc_loss
@@ -160,10 +156,10 @@ for epoch in range(N_EPOCHS):
         
         # ---- Segmentation pass ----
         outputs = (seg_model(image.unsqueeze(0).to(device).float()))
-        seg_loss = dice_focal_loss(outputs.to(device), labels.to(device))
+        seg_loss = dice_focal_loss(outputs.to(device), labels.to(device)) # calculate loss
         seg_train_loss += seg_loss.item()
         
-        # true_segmentation = plotter.plot_slice_with_contours(imageee.unsqueeze(0)[:, :, 25].cpu(), outputs.long().cpu()[0,:, 25], info['label_info'])
+        # true_segmentation = multi_loader.plot_slice_with_contours(imageee.unsqueeze(0)[:, :, 25].cpu(), outputs.long().cpu()[0,:, 25], info['label_info'])
         # plt.figure()
         # plt.imshow(true_segmentation .squeeze())
         # plt.show()
@@ -182,7 +178,7 @@ for epoch in range(N_EPOCHS):
         scaler.step(sr_optimizer)
         scaler.update()
         
-       #  del total_loss, seg_loss, sr_loss,  outputs, labels
+        # del total_loss, seg_loss, sr_loss,  outputs, labels
         torch.cuda.empty_cache()
         count += 1
         
@@ -221,7 +217,7 @@ for epoch in range(N_EPOCHS):
             total_valid_loss += total_loss.item()
             # del total_loss, seg_loss, sr_loss,  outputs, labels
             
-            # calculate metrics
+            # calculate evaluation metrics
             for i, metric in enumerate(METRICS): 
                 score_3d = metric(outputs.to(device), labels.to(device))
                 try:
@@ -229,6 +225,7 @@ for epoch in range(N_EPOCHS):
                 except:
                     scores[metric_names[i]+"_3D"] = score_3d
 
+            # calculate means without nans
             for key in scores.keys():
                 means = []
                 stds = []
@@ -238,42 +235,42 @@ for epoch in range(N_EPOCHS):
                 stds.append(torch.std(scores[key][0][~(maskisnan | maskisinf)]))
                 scores[key]=torch.stack((torch.tensor(means), torch.tensor(stds)), dim=1)
                  
-            # save progress images 
+            # save progress images with segmentation
             if index < 3:  # Limit to 3 validation samples
                 sr_image = image.unsqueeze(0)[:, :, 25].cpu().numpy()
-                sr_image = np.clip(sr_image,0,1)
+                #sr_image = np.clip(sr_image,0,1)
                 sr_image = sr_image[:, 0]*255
                 sr_image = sr_image[0].astype(np.uint8)
                 sr_image = cv.cvtColor(sr_image, cv.COLOR_GRAY2RGB)
                 slice_image = torch.from_numpy(sr_image)  
                 images.append(slice_image.unsqueeze(0))
 
-
-                # Predicted segmentation
-                pred_segmentation = plotter.plot_slice_with_contours(image.unsqueeze(0)[:, :, 25].cpu(), (outputs>0).long().cpu()[0,:, 25], info['label_info'])
+                # predicted segmentation
+                pred_segmentation = multi_loader.plot_slice_with_contours(image.unsqueeze(0)[:, :, 25].cpu(), (outputs>0).long().cpu()[0,:, 25], info['label_info'])
                 images.append(pred_segmentation)
                 plt.figure()
                 plt.imshow(pred_segmentation.squeeze())
                 plt.show()
      
-    
-                # True segmentation
-                true_segmentation = plotter.plot_slice_with_contours(image.unsqueeze(0)[:, :, 25].cpu(), labels[:, 25].cpu(), info['label_info'])
+                # true segmentation
+                true_segmentation = multi_loader.plot_slice_with_contours(image.unsqueeze(0)[:, :, 25].cpu(), labels[:, 25].cpu(), info['label_info'])
                 images.append(true_segmentation)
    
             index += 1
 
-    # Stack images and create a 3x3 grid
+    # stack images and create a 3x3 grid
     images_stacked = torch.cat(images).permute(0,3,1,2)
     img_grid = make_grid(images_stacked, nrow=3, padding=12, pad_value=-1)
     plt.imsave(image_path_seg / f"epoch_{epoch}.png", img_grid.permute(1, 2, 0).numpy())
     
+    # store validation results
     for metric in scores:
         try:
             valid_metric_scores[metric] = torch.cat((valid_metric_scores[metric], scores[metric].unsqueeze(0)), dim=0)
         except:
             valid_metric_scores[metric] = scores[metric].unsqueeze(0)
-       
+    
+        # save plot of the validation metric vs epoch
     for key in scores:
         plt.clf()
         maskisnan=torch.isnan(valid_metric_scores[key][:, 0, 0])
@@ -300,19 +297,45 @@ for epoch in range(N_EPOCHS):
         plot_name = SEG_DIR / f"{key}.png"
         plt.savefig(plot_name, dpi=200)     
         
-        
+    # save validation metrics to csv    
     for metric in scores.keys(): 
-        np.savetxt(SEG_DIR / f"{metric}_validation_scores.csv", scores[metric][0].cpu(), delimiter=",")
+        np.savetxt(SEG_DIR / f"{metric}_valid_scores.csv", valid_metric_scores[metric][:, 0, 0], delimiter=",")
             
     del total_loss, seg_loss, sr_loss,  outputs, labels, inputs, pixel_loss, perc_loss, image_path         
     torch.cuda.empty_cache()
         
-        
+    # store validation loss    
     seg_valid_list.append(seg_valid_loss/ len(valid_dataloader))
     total_valid_list.append(total_valid_loss/ len(valid_dataloader))
     print("Loss/train: "+str(seg_train_loss / len(dataloader))+ ' Epoch: '+ str(epoch))
     print("Loss/validation: "+str(seg_valid_loss / len(valid_dataloader))+ ' Epoch: '+ str(epoch))
     
+    # make  loss curves and save
+    plt.clf()
+    plt.plot(range(1, len(seg_train_list)+1), seg_train_list, label="Training loss")
+    plt.plot(range(1, len(seg_train_list)+1), seg_valid_list, label="Validation loss")
+    plt.xlabel('Number of epochs')
+    plt.ylabel('Dice Focal Loss')
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    plt.ylim(0, max(seg_valid_list) + max(seg_valid_list)*0.1)
+    plt.legend()
+    plot_name = SEG_DIR / "loss_curves.png"
+    plt.savefig(plot_name, dpi=200)
+
+    plt.clf()
+    plt.plot(range(1, len(total_train_list)+1), total_train_list, label="Training loss")
+    plt.plot(range(1, len(total_train_list)+1), total_valid_list, label="Validation loss")
+    plt.xlabel('Number of epochs')
+    plt.ylabel('Total Loss')
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    plt.ylim(0, max(total_valid_list) + max(total_valid_list)*0.1)
+    plt.legend()
+    plot_name = SR_DIR / "loss_curves.png"
+    plt.savefig(plot_name, dpi=200)
+    
+    # stop trainings loop when loss meets requirements
     if (seg_valid_loss / len(valid_dataloader)) < minimum_valid_loss or epoch<= 9:
         epochs_no_improve = 0
         best_epoch = epoch
@@ -323,37 +346,12 @@ for epoch in range(N_EPOCHS):
     else:
         epochs_no_improve += 1
         
-    if epoch > 9 and epochs_no_improve >= tolerance:
+    if epoch > 5 and epochs_no_improve >= tolerance:
         break
     else:
         continue  
 
 #%% save results
-
-# make  loss curves and save
-plt.clf()
-plt.plot(range(1, len(seg_train_list)+1), seg_train_list, label="Training loss")
-plt.plot(range(1, len(seg_train_list)+1), seg_valid_list, label="Validation loss")
-plt.xlabel('Number of epochs')
-plt.ylabel('Dice Focal Loss')
-ax = plt.gca()
-ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-plt.ylim(0, max(seg_valid_list) + max(seg_valid_list)*0.1)
-plt.legend()
-plot_name = SEG_DIR / "loss_curves.png"
-plt.savefig(plot_name, dpi=200)
-
-plt.clf()
-plt.plot(range(1, len(total_train_list)+1), total_train_list, label="Training loss")
-plt.plot(range(1, len(total_train_list)+1), total_valid_list, label="Validation loss")
-plt.xlabel('Number of epochs')
-plt.ylabel('Total Loss')
-ax = plt.gca()
-ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-plt.ylim(0, max(total_valid_list) + max(total_valid_list)*0.1)
-plt.legend()
-plot_name = SR_DIR / "loss_curves.png"
-plt.savefig(plot_name, dpi=200)
 
 # save excel of losses
 np.savetxt(SEG_DIR / "train_losses.csv", seg_train_list, delimiter=",")
@@ -365,17 +363,3 @@ np.savetxt(SR_DIR / "validation_losses.csv", total_valid_list, delimiter=",")
 torch.save(best_weights_seg, SEG_DIR / f"seg_net_{best_epoch}.pth") 
 torch.save(best_weights_sr, SR_DIR / f"sr_net_{best_epoch}.pth") 
 
-
-#%% Test scriptjes 
-
-# image = image.squeeze(0)
-# plt.figure()
-# plt.imshow(image.detach().numpy()[30], cmap = 'gray')  
-# plt.show()  
-
-# torch.cuda.memory_allocated()
-
-# for name, param in seg_model.named_parameters():
-#     if param.grad is not None:
-#         print(f"{name}2: {param.grad.norm()}")  # Check gradient norms
-#         break
